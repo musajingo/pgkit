@@ -11,6 +11,7 @@
 //!     #[pgkit(primary_key)] pub id: i32,
 //!     pub name: String,
 //!     pub region: Option<String>,
+//!     #[pgkit(json)] pub metadata: sqlx::types::Json<serde_json::Value>,
 //! }
 //! ```
 //!
@@ -27,21 +28,43 @@
 //!         column: CountryColumn,
 //!     ) -> Result<Option<CursorValue>, CursorPaginationError> {
 //!         match column {
-//!             CountryColumn::Id => self.id.clone()
-//!                 .map(|v| Some(CursorValue::from(v)))
-//!                 .ok_or_else(|| CursorPaginationError::OrderingColumnNotProjected {
-//!                     column: column.to_string(),
-//!                 }),
-//!             CountryColumn::Name => self.name.clone()
-//!                 .map(|v| Some(CursorValue::from(v)))
-//!                 .ok_or_else(|| CursorPaginationError::OrderingColumnNotProjected {
-//!                     column: column.to_string(),
-//!                 }),
-//!             CountryColumn::Region => self.region.clone()
-//!                 .map(|inner| inner.map(CursorValue::from))
-//!                 .ok_or_else(|| CursorPaginationError::OrderingColumnNotProjected {
-//!                     column: column.to_string(),
-//!                 }),
+//!             CountryColumn::Id => {
+//!                 let value = self.id.clone().ok_or_else(||
+//!                     CursorPaginationError::OrderingColumnNotProjected {
+//!                         column: column.to_string(),
+//!                     })?;
+//!                 Ok(Some(CursorValue::from(value)))
+//!             }
+//!             CountryColumn::Name => {
+//!                 let value = self.name.clone().ok_or_else(||
+//!                     CursorPaginationError::OrderingColumnNotProjected {
+//!                         column: column.to_string(),
+//!                     })?;
+//!                 Ok(Some(CursorValue::from(value)))
+//!             }
+//!             CountryColumn::Region => {
+//!                 let value = self.region.clone().ok_or_else(||
+//!                     CursorPaginationError::OrderingColumnNotProjected {
+//!                         column: column.to_string(),
+//!                     })?;
+//!                 match value {
+//!                     Some(value) => Ok(Some(CursorValue::from(value))),
+//!                     None => Ok(None),
+//!                 }
+//!             }
+//!             CountryColumn::Metadata => {
+//!                 let value = self.metadata.clone().ok_or_else(||
+//!                     CursorPaginationError::OrderingColumnNotProjected {
+//!                         column: column.to_string(),
+//!                     })?;
+//!                 let value = serde_json::to_value(&value)
+//!                     .map(CursorValue::Json)
+//!                     .map_err(|error| CursorPaginationError::InternalError {
+//!                         message: format!("failed to serialize cursor ordering column \"{}\"", column),
+//!                         source: error.into(),
+//!                     })?;
+//!                 Ok(Some(value))
+//!             }
 //!         }
 //!     }
 //! }
@@ -52,7 +75,8 @@
 //!
 //! Each column's non-nullable Rust type needs `From<T> for CursorValue`, unless
 //! marked `#[pgkit(json)]`. JSON fields use `serde_json::to_value`; serialization
-//! errors currently become JSON null. Custom enum types need their own `From`
+//! errors return `CursorPaginationError::InternalError` with the column name
+//! and original error. Custom enum types need their own `From`
 //! implementation. These requirements disappear when this impl is skipped.
 //!
 //! Two branches in the per-column arm:
@@ -106,52 +130,45 @@ pub(crate) fn emit(model: &Model) -> TokenStream {
         // `CursorValue::Json`; the Rust type need only be `Serialize`, not
         // `Into<CursorValue>` (JSON/JSONB types rarely have a `From` impl, and
         // a foreign newtype can't be given one under the orphan rule).
-        let to_cursor_value = if f.is_json {
+        let cursor_value = if f.is_json {
             quote! {
-                |v| ::pgkit::pagination::cursor::CursorValue::Json(
-                    ::pgkit::__private::serde_json::to_value(&v).unwrap_or(::pgkit::__private::serde_json::Value::Null)
-                )
+                ::pgkit::__private::serde_json::to_value(&value)
+                    .map(::pgkit::pagination::cursor::CursorValue::Json)
+                    .map_err(|error| ::pgkit::pagination::cursor::CursorPaginationError::InternalError {
+                        message: ::std::format!("failed to serialize cursor ordering column \"{}\"", column),
+                        source: error.into(),
+                    })?
             }
         } else {
-            quote! { ::pgkit::pagination::cursor::CursorValue::from }
+            quote! { ::pgkit::pagination::cursor::CursorValue::from(value) }
         };
 
-        // The partial-field shape differs for nullable vs. non-nullable
-        // source columns; the cursor value extraction differs to match.
-        // `to_cursor_value` is what requires every column type to be
-        // convertible: every scalar that can serve as a sort key has a
-        // `From<T> for CursorValue` impl; other types must supply one (or be
-        // marked `json`).
-        if f.option_inner.is_some() {
-            // Source is Option<U>; partial field is Option<Option<U>>.
-            // Map twice: the outer Option becomes the "projected?" answer
-            // we propagate via `ok_or_else`, the inner Option carries the
-            // SQL-NULL distinction into the cursor. The error names the
-            // offending column via the enum's `Display` impl so callers
-            // can produce a self-describing error message.
+        // The outer option records projection. For nullable fields, the inner
+        // option preserves SQL NULL without attempting JSON serialization.
+        let result = if f.option_inner.is_some() {
             quote! {
-                #columns_ident::#variant => self
-                    .#field_ident
-                    .clone()
-                    .map(|inner| inner.map(#to_cursor_value))
-                    .ok_or_else(|| ::pgkit::pagination::cursor::CursorPaginationError::OrderingColumnNotProjected {
-                        column: column.to_string(),
-                    }),
+                match value {
+                    ::core::option::Option::Some(value) =>
+                        ::core::result::Result::Ok(::core::option::Option::Some(#cursor_value)),
+                    ::core::option::Option::None =>
+                        ::core::result::Result::Ok(::core::option::Option::None),
+                }
             }
         } else {
-            // Source is T; partial field is Option<T>. Single map turns
-            // `Some(v)` into `Some(Some(v.into()))` so the outer option
-            // still signals "projected" and the inner option is always
-            // `Some` (a non-nullable column can't be NULL). The error
-            // names the offending column via the enum's `Display` impl.
             quote! {
-                #columns_ident::#variant => self
+                ::core::result::Result::Ok(::core::option::Option::Some(#cursor_value))
+            }
+        };
+
+        quote! {
+            #columns_ident::#variant => {
+                let value = self
                     .#field_ident
                     .clone()
-                    .map(|v| ::core::option::Option::Some((#to_cursor_value)(v)))
                     .ok_or_else(|| ::pgkit::pagination::cursor::CursorPaginationError::OrderingColumnNotProjected {
                         column: column.to_string(),
-                    }),
+                    })?;
+                #result
             }
         }
     });

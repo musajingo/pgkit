@@ -46,7 +46,8 @@ mod retry;
 /// `Option<Option<T>>`: the outer option records projection, the inner SQL NULL.
 /// Cursor extraction requires `From<T> for CursorValue` for each field's
 /// non-nullable type, unless marked `json` or pagination is skipped. A `json`
-/// field needs `Serialize`; serialization errors currently become JSON null.
+/// field needs `Serialize`; serialization failures return
+/// `CursorPaginationError::InternalError` with the column name and original error.
 ///
 /// Other attributes (`#[sqlx(...)]`, `#[serde(...)]`, `#[doc = ...]`) are
 /// ignored by this derive. If a column needs renaming in `sqlx`'s derive

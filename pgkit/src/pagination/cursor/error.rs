@@ -15,6 +15,7 @@ pub enum CursorPaginationError {
     #[error("error encoding or decoding the cursor: {0}")]
     CursorError(#[from] CursorError),
 
+    /// A server-side pagination failure, such as serializing an ordering value.
     #[error("something went wrong in cursor pagination: {message}")]
     InternalError {
         message: String,

@@ -25,6 +25,181 @@ where
 {
 }
 
+mod json_cursor_values {
+    use super::*;
+    use pgkit::ordering::{OrderBy, OrderByDirection};
+    use pgkit::pagination::cursor::{CursorPagination, CursorPayload};
+    use serde::{Deserialize, Serialize, Serializer};
+    use sqlx::types::Json;
+
+    #[derive(Debug, Clone, Deserialize)]
+    #[serde(transparent)]
+    pub struct SortJson(serde_json::Value);
+
+    impl Serialize for SortJson {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            if self.0 == serde_json::json!(2) {
+                Err(serde::ser::Error::custom("sort value cannot be serialized"))
+            } else {
+                self.0.serialize(serializer)
+            }
+        }
+    }
+
+    #[derive(PgKit)]
+    #[pgkit(table_name = "json_cursor_values")]
+    #[allow(dead_code)]
+    pub struct JsonRow {
+        #[pgkit(primary_key)]
+        pub id: i32,
+        #[pgkit(json)]
+        pub required: Json<SortJson>,
+        #[pgkit(json)]
+        pub optional: Option<Json<SortJson>>,
+    }
+
+    fn row(value: serde_json::Value) -> PartialJsonRow {
+        let value: Json<SortJson> = serde_json::from_value(value).unwrap();
+        PartialJsonRow {
+            id: Some(1),
+            required: Some(value.clone()),
+            optional: Some(Some(value)),
+        }
+    }
+
+    fn assert_serialization_error<T>(result: Result<T, CursorPaginationError>, column: JsonColumn) {
+        let error = result.err().expect("serialization must fail");
+        let CursorPaginationError::InternalError { message, source } = error else {
+            panic!("expected an internal serialization error");
+        };
+        assert_eq!(
+            message,
+            format!("failed to serialize cursor ordering column \"{column}\"")
+        );
+        let source = source
+            .downcast_ref::<serde_json::Error>()
+            .expect("original JSON error must be preserved");
+        assert_eq!(source.to_string(), "sort value cannot be serialized");
+    }
+
+    #[test]
+    fn json_serialization_failures_are_returned() {
+        let row = row(serde_json::json!(2));
+        for column in [JsonColumn::Required, JsonColumn::Optional] {
+            assert_serialization_error(row.ordering_column_value(column), column);
+        }
+    }
+
+    #[test]
+    fn response_parts_rejects_unserializable_boundary_values() {
+        for column in [JsonColumn::Required, JsonColumn::Optional] {
+            let pagination =
+                CursorPagination::<JsonColumn, i32>::with_validated_column_selection::<()>(
+                    OrderBy::new(column, OrderByDirection::Asc),
+                    1,
+                    None,
+                    None,
+                )
+                .unwrap();
+            assert_serialization_error(
+                pagination.into_response_parts(vec![
+                    row(serde_json::json!(2)),
+                    PartialJsonRow {
+                        id: Some(2),
+                        ..row(serde_json::json!(3))
+                    },
+                ]),
+                column,
+            );
+        }
+    }
+
+    #[test]
+    fn successful_json_serialization_preserves_the_value() {
+        let value = serde_json::json!({"rank": 1, "tags": ["a", "b"]});
+        let row = row(value.clone());
+        for column in [JsonColumn::Required, JsonColumn::Optional] {
+            assert_eq!(
+                row.ordering_column_value(column).unwrap(),
+                Some(CursorValue::Json(value.clone())),
+            );
+        }
+    }
+
+    #[test]
+    fn nullable_json_preserves_sql_null() {
+        let row = PartialJsonRow {
+            optional: Some(None),
+            ..PartialJsonRow::default()
+        };
+        assert_eq!(
+            row.ordering_column_value(JsonColumn::Optional).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn json_null_is_preserved_in_the_cursor() {
+        for column in [JsonColumn::Required, JsonColumn::Optional] {
+            let pagination =
+                CursorPagination::<JsonColumn, i32>::with_validated_column_selection::<()>(
+                    OrderBy::new(column, OrderByDirection::Asc),
+                    1,
+                    None,
+                    None,
+                )
+                .unwrap();
+            let (_, cursor) = pagination
+                .into_response_parts(vec![
+                    row(serde_json::Value::Null),
+                    row(serde_json::json!(1)),
+                ])
+                .unwrap();
+            let decoded =
+                CursorPayload::<JsonColumn, i32>::decode(&cursor.unwrap().encode().unwrap())
+                    .unwrap();
+            assert_eq!(
+                decoded.val,
+                Some(CursorValue::Json(serde_json::Value::Null))
+            );
+        }
+    }
+
+    #[test]
+    fn missing_json_projections_remain_projection_errors() {
+        let row = PartialJsonRow::default();
+        for column in [JsonColumn::Required, JsonColumn::Optional] {
+            assert!(matches!(
+                row.ordering_column_value(column),
+                Err(CursorPaginationError::OrderingColumnNotProjected { column: name })
+                    if name == column.to_string()
+            ));
+        }
+    }
+
+    #[test]
+    fn unused_json_sort_values_do_not_block_cursor_creation() {
+        let pagination =
+            CursorPagination::<JsonColumn, i32>::with_validated_column_selection::<()>(
+                OrderBy::new(JsonColumn::Id, OrderByDirection::Asc),
+                1,
+                None,
+                None,
+            )
+            .unwrap();
+        let (_, cursor) = pagination
+            .into_response_parts(vec![
+                row(serde_json::json!(2)),
+                PartialJsonRow {
+                    id: Some(2),
+                    ..row(serde_json::json!(2))
+                },
+            ])
+            .unwrap();
+        assert_eq!(cursor.unwrap().val, Some(CursorValue::Int(1)));
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Scenario 1: default names. With only `table_name` set, every derived
 // ident follows the documented "strip Row, suffix" convention.

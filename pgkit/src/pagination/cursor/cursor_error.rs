@@ -9,7 +9,7 @@ pub enum CursorError {
     #[error("UTF-8 error: {0}")]
     Utf8(#[from] std::string::FromUtf8Error),
 
-    /// JSON decoding failed.
+    /// JSON serialization or deserialization failed.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 

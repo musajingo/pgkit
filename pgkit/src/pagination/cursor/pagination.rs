@@ -177,6 +177,10 @@ impl<T, Id> CursorPagination<T, Id> {
     /// [`effective_limit`](Self::effective_limit) and truncates
     /// `rows` to [`effective_limit`](Self::effective_limit).
     ///
+    /// # Errors
+    /// Returns an error if the last retained row's primary key or ordering
+    /// column was not projected, or its JSON sort value could not be serialized.
+    ///
     /// # Args
     /// - `rows`: The rows fetched from the database using [`fetch_limit`](Self::fetch_limit).
     pub fn into_response_parts<R>(&self, mut rows: Vec<R>) -> ResponseParts<R, T, Id>
