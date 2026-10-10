@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+# Pre-push hook to avoid wasting CI runs
+# Bypass with: git push --no-verify
+
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+# Warn if the working tree differs from what is being pushed.
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "WARNING: uncommitted changes — checks run on your working tree, not the pushed commits." >&2
+fi
+
+exec ./scripts/check.sh
