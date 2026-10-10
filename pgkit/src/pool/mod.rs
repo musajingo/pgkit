@@ -1,4 +1,4 @@
-//! Opens a [`sqlx::PgPool`] with production-safe defaults; see
+//! Opens a [`sqlx::PgPool`] with configurable limits and timeouts; see
 //! [`PoolConfig`] for each knob and its default.
 
 mod config;

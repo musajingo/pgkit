@@ -1,3 +1,9 @@
+//! PostgreSQL query builders. Bring [`WhereOps`] into scope for WHERE methods.
+//!
+//! Value methods bind SQL parameters. Table names, column names and raw SQL
+//! are inserted as supplied and must be trusted. Generated table and column
+//! types provide Rust metadata; SQL validity is checked when the database runs it.
+
 pub mod operators;
 
 mod delete_builder;

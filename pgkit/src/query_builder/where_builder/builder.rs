@@ -82,7 +82,7 @@ impl<'a> WhereBuilder<'a> {
     ///
     /// # Arguments
     /// * `column` - The name of the column.
-    /// * `operator` - The comparison operator (e.g., `=`, `>`, `LIKE`).
+    /// * `operator` - The comparison operator (e.g., `=`, `>`, `<>`).
     /// * `value` - The value to bind for the comparison.
     ///
     /// # Example
@@ -120,7 +120,7 @@ impl<'a> WhereBuilder<'a> {
     ///
     /// # Arguments
     /// * `column` - The name of the column.
-    /// * `operator` - The comparison operator (e.g., `=`, `>`, `LIKE`).
+    /// * `operator` - The comparison operator (e.g., `=`, `>`, `<>`).
     /// * `value` - The value to bind for the comparison.
     ///
     /// # Example
@@ -650,10 +650,9 @@ impl<'a> WhereBuilder<'a> {
 
     /// Adds a `WHERE column = ANY($1)` condition using `AND`.
     ///
-    /// Binds the entire vector as a single PostgreSQL array parameter (rather than
-    /// inlining each value as `WHERE column IN ($1, $2, ...)`). Functionally
-    /// equivalent to `where_in` when used with `=`, but more efficient for large
-    /// arrays and works with any comparison operator via [`where_any_op`].
+    /// Binds the entire vector as one PostgreSQL array parameter, instead of
+    /// one parameter per element as in [`where_in`](Self::where_in).
+    /// Equivalent to `where_in`; use [`where_any_op`] for other comparisons.
     ///
     /// An empty `value` vector binds an empty array, which matches nothing
     /// (`= ANY('{}')` is `FALSE`), exact SQL semantics.
@@ -701,9 +700,8 @@ impl<'a> WhereBuilder<'a> {
 
     /// Adds a `WHERE column op ANY($1)` condition using `AND`.
     ///
-    /// Like [`where_any`](Self::where_any) but accepts an arbitrary comparison
-    /// operator, e.g. `column <> ANY(arr)`, `column LIKE ANY(arr)`,
-    /// `column > ANY(arr)`.
+    /// Like [`where_any`](Self::where_any) but accepts a [`ComparisonOperator`],
+    /// e.g. `column <> ANY(arr)` or `column > ANY(arr)`.
     ///
     /// An empty `value` vector binds an empty array, which matches nothing
     /// (`op ANY('{}')` is `FALSE`), exact SQL semantics.
@@ -1011,8 +1009,7 @@ impl<'a> WhereBuilder<'a> {
 
     /// Adds a WHERE condition using a closure only if the condition is true.
     /// The closure receives the current `WhereBuilder` to add conditions to.
-    /// Conditions added within the closure will be connected using `AND` or `OR` based on
-    /// the context where `when` is called.
+    /// Methods inside the closure choose their own `AND` or `OR` separators.
     ///
     /// # Arguments
     /// * `condition` - A boolean indicating whether to execute the callback.
@@ -1602,10 +1599,9 @@ impl<'a> WhereBuilder<'a> {
         self.conditions.is_empty()
     }
 
-    /// True when the clause filters nothing: either it has no conditions, or
-    /// every condition renders as a constant `TRUE` (an empty `NOT IN` / `<> ALL`
-    /// list). The whole-table write guards check this rather than `is_empty`,
-    /// which such a clause would otherwise pass.
+    /// True if empty or every condition reports itself as unconditional,
+    /// such as an empty `NOT IN` / `ALL` list. Used by whole-table write guards.
+    /// Does not analyze raw SQL or detect every logically unrestricted clause.
     pub fn is_unfiltered(&self) -> bool {
         self.conditions
             .iter()

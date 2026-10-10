@@ -1,6 +1,6 @@
 use super::cursor_error::CursorError;
 
-/// Errors that can occur during cursor encode/decode.
+/// Errors from cursor pagination, projection checks, and cursor encoding.
 #[derive(Debug, thiserror::Error)]
 pub enum CursorPaginationError {
     /// The column used for identifying the row was not in the selected columns.

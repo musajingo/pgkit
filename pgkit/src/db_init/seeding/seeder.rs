@@ -4,10 +4,10 @@ use super::error::SeedError;
 use super::errors::SeedErrors;
 use super::seed::Seed;
 
-/// Applies seeds.
+/// Executes seeds in slice order on every call, without version tracking.
 ///
-/// The seeder tracks nothing, every script executes on every run.
-/// Scripts must guard against data corruption on their own.
+/// Continues after failures and returns them together in [`SeedErrors`].
+/// The collection is not wrapped in a transaction. Make repeated runs safe.
 ///
 /// Two common guards:
 ///
@@ -36,6 +36,8 @@ pub struct Seeder {
 }
 
 impl Seeder {
+    /// Uses a static seed slice. A merged vector can be stored in a static
+    /// [`std::sync::OnceLock`] to supply this lifetime.
     pub const fn new(seeds: &'static [Seed]) -> Self {
         Seeder { seeds }
     }

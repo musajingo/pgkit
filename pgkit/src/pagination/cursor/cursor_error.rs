@@ -13,12 +13,7 @@ pub enum CursorError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
-    /// The sort value carried by the cursor is of a type the sort column
-    /// cannot hold, so no page of this listing could have minted it.
-    ///
-    /// Binding it anyway makes PostgreSQL fail with an operator/cast error,
-    /// which is indistinguishable from a server fault; rejecting here keeps it
-    /// a client error.
+    /// The cursor value and sort column belong to incompatible type classes.
     #[error("cursor value {value} does not fit sort column of type {column}")]
     ValueTypeMismatch { value: &'static str, column: String },
 }

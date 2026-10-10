@@ -1,16 +1,12 @@
 //! Full-text search helpers for Postgres `tsvector` / `tsquery` columns.
 
-/// The most terms one query may carry; extra terms are ignored. Postgres has
-/// its own tsquery size limit past which `to_tsquery` raises a syntax error,
-/// and every term costs CPU, so user-supplied search input should be bounded.
-/// Sixteen is far past any real search.
+/// Maximum number of non-empty sanitized terms; extra terms are ignored.
 pub const MAX_TERMS: usize = 16;
 
-/// Builds a sanitized prefix-match `to_tsquery` string from a free-text search
-/// term, e.g. `"red shoe"` → `"red:* & shoe:*"`. tsquery metacharacters are
-/// stripped from each term so user input can never inject query operators, and
-/// at most [`MAX_TERMS`] terms are used. Returns `None` when nothing usable
-/// remains.
+/// Builds prefix-match `to_tsquery` input, e.g. `"red shoe"` → `"red:* & shoe:*"`.
+/// Splits on whitespace, strips tsquery operator characters, and joins up to
+/// [`MAX_TERMS`] remaining terms with `&`. Returns `None` if no terms remain.
+/// Bind the result as a SQL parameter; this function does not escape SQL.
 pub fn build_tsquery(input: &str) -> Option<String> {
     let terms: Vec<String> = input
         .split_whitespace()

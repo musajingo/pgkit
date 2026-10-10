@@ -2,7 +2,7 @@ use std::fmt;
 
 use super::error::SeedError;
 
-/// Every failure from single `Seeder::run`.
+/// All script failures from one [`super::Seeder::run`] call.
 #[derive(Debug)]
 pub struct SeedErrors(pub Vec<SeedError>);
 

@@ -13,7 +13,7 @@ use crate::types::{ColumnRef, DatabaseTableColumn, TableRef};
 ///
 /// 1. **Paired single row**: `.value(col, val).value(col, val)` …
 /// 2. **Multi-row VALUES**: `.columns([c1, c2]).row(|r| r.bind(v1).bind(v2)).row(...)`
-/// 3. **INSERT … SELECT**: `.columns([c1, c2]).with_select(|q| q.push("SELECT …"))`
+/// 3. **INSERT … SELECT**: `.columns([c1, c2]).with_select(|q| { q.push("SELECT …"); })`
 ///
 /// Plus `ON CONFLICT … DO NOTHING / DO UPDATE` and `RETURNING …` clauses.
 ///

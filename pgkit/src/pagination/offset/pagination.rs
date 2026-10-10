@@ -28,8 +28,15 @@ impl Default for OffsetPagination {
 }
 
 impl OffsetPagination {
-    /// Constructs a [`OffsetPagination`], clamping `page_size` to `MAX_PAGE_SIZE`.
-    /// `page` is `max`-ed with `1` so callers cannot construct a 0-indexed page.
+    /// Constructs pagination with `page >= 1` and `page_size` clamped
+    /// between 1 and the page-size cap (see [`crate::pagination`]):
+    ///
+    /// ```
+    /// use pgkit::pagination::offset::OffsetPagination;
+    ///
+    /// let p = OffsetPagination::new(0, 1_000);
+    /// assert_eq!((p.page(), p.page_size()), (1, 256));
+    /// ```
     pub fn new(page: u32, page_size: u32) -> Self {
         Self {
             page: page.max(1),

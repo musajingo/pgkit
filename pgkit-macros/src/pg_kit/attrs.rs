@@ -1,10 +1,11 @@
 //! Attribute parsing for `#[derive(PgKit)]`.
 //!
-//! Three attributes are recognized:
+//! Recognized attributes:
 //!
 //! - `#[pgkit(...)]` on the struct: container configuration.
 //! - `#[pgkit(rename = "...")]` on a field: column rename.
 //! - `#[pgkit(primary_key)]` on exactly one field.
+//! - `#[pgkit(json)]` on a JSON field.
 //!
 //! Everything else (including `#[sqlx(...)]`) is ignored.
 
@@ -120,7 +121,7 @@ pub(crate) struct FieldAttrs {
     pub column_rename: Option<String>,
     /// `#[pgkit(json)]`: a JSON/JSONB column whose Rust type has no
     /// `From<T> for CursorValue`. Its cursor value is carried as
-    /// `CursorValue::Json` (the type need only be `Serialize`).
+    /// `CursorValue::Json`; cursor conversion requires `Serialize`.
     pub is_json: bool,
 }
 

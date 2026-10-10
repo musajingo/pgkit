@@ -1,6 +1,6 @@
 //! `ColumnTypeInfo`: runtime access to a column's Postgres type.
 
-/// Reports the Postgres type of each column variant.
+/// Reports type metadata for each column variant, without querying the database.
 pub trait ColumnTypeInfo {
     /// The Postgres type of this column, taken from the column's Rust type via
     /// [`sqlx::Type`]. For a Postgres `enum` column this is a

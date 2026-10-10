@@ -4,16 +4,16 @@ use super::config::PoolConfig;
 
 /// Connects and returns a [`PgPool`] configured by [`PoolConfig`].
 ///
-/// On top of the pool limits, every session gets Postgres's
-/// `statement_timeout` and `idle_in_transaction_session_timeout`, so a
-/// runaway query or an abandoned transaction cannot hold a pooled
-/// connection forever.
+/// Sets Postgres's `statement_timeout` and
+/// `idle_in_transaction_session_timeout` on each connection. These timeouts
+/// limit long statements and idle transactions; they do not bound how long
+/// application code holds a connection.
 #[tracing::instrument(skip(connect_options))]
 pub async fn get(
     connect_options: PgConnectOptions,
     config: PoolConfig,
 ) -> Result<PgPool, sqlx::Error> {
-    // Small warm floor, capped so tiny pools (max=1) stay valid.
+    // Small floor of open connections, capped so tiny pools (max=1) stay valid.
     let min_connections = (config.max_connections / 4)
         .clamp(1, 5)
         .min(config.max_connections);

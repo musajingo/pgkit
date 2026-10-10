@@ -1,7 +1,10 @@
 use super::DatabaseTableColumn;
 use crate::query_builder::{DeleteBuilder, InsertBuilder, SelectBuilder, UpdateBuilder};
 
-/// A table in the the database.
+/// Table metadata used by the query builders; not checked against the database.
+///
+/// The provided methods start a builder with the table name pre-filled:
+/// `CountryTable::select()` equals `Query::select().from(CountryTable)`.
 pub trait DatabaseTable {
     /// The columns for this table.
     type Columns: DatabaseTableColumn;

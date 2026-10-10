@@ -193,7 +193,8 @@ impl<'a> UpdateBuilder<'a> {
     ///
     /// - If [`table`](Self::table) was never called.
     /// - If no SET assignments were added.
-    /// - If the WHERE clause is empty and [`all`](Self::all) was not called.
+    /// - If the WHERE clause is empty or every condition is recognized as
+    ///   unconditional, and [`all`](Self::all) was not called.
     pub fn build(self) -> QueryBuilder<Postgres> {
         let table = self
             .table

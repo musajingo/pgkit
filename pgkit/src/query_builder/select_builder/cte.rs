@@ -29,8 +29,7 @@ impl<'a> CteItem<'a> {
     }
 }
 
-/// Construction helpers re-exported as `CteBuilder` so users have a simple
-/// type to write against. Currently just a marker; CTEs are added via
+/// Marker type with no builder methods. Add CTEs through
 /// [`SelectBuilder::with_cte`](super::SelectBuilder::with_cte) and
 /// [`SelectBuilder::with_recursive`](super::SelectBuilder::with_recursive).
 pub struct CteBuilder;

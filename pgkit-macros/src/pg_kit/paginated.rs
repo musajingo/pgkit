@@ -47,18 +47,13 @@
 //! }
 //! ```
 //!
-//! `PaginatedRow` is parameterized by the **full column enum**, and pgkit
-//! puts no restriction on which column may be a sort key,
-//! so `ordering_column_value` accepts any column and the `match` is
-//! exhaustive over the enum, with a real value arm for *every* column.
-//! There is no catch-all.
+//! `ordering_column_value` matches every column in the enum. Whether a column
+//! supports the keyset query's comparisons is checked by PostgreSQL at runtime.
 //!
-//! Because every column can yield a cursor value, **every column's Rust
-//! type must be `Into<CursorValue>`**: each arm calls `CursorValue::from`.
-//! `CursorValue` has `From` impls for the scalar SQL types out of the box;
-//! a column of any other type (e.g. a Postgres `enum` mapped to a custom
-//! Rust enum) needs its own `From<T> for CursorValue` impl, or the emitted
-//! code won't compile.
+//! Each column's non-nullable Rust type needs `From<T> for CursorValue`, unless
+//! marked `#[pgkit(json)]`. JSON fields use `serde_json::to_value`; serialization
+//! errors currently become JSON null. Custom enum types need their own `From`
+//! implementation. These requirements disappear when this impl is skipped.
 //!
 //! Two branches in the per-column arm:
 //!

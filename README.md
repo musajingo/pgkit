@@ -6,54 +6,39 @@
 
 Postgres utilities for Rust, built on [sqlx](https://github.com/launchbadge/sqlx).
 
-pgkit is a small toolkit for the repository layer of a Postgres-backed
-application: a typed query builder, a derive macro that turns a row struct into
-table and column types, offset and cursor pagination, a retry macro for
-transient database errors, and an error type that classifies constraint
-violations.
-
-It is not an ORM. There are no relations, no change tracking and no migrations.
-You write the query, pgkit helps you build it safely and sqlx runs it.
+pgkit provides query builders, row-derived table and column types, pagination,
+retries, database errors, and embedded migrations and seeds. SQLx executes the
+queries. PostgreSQL checks SQL syntax and whether tables and columns exist.
 
 > **Status:** pre-1.0. The API may change between minor versions.
 
 ## Features
 
 - **Query builder** for `SELECT`, `INSERT`, `UPDATE` and `DELETE`, with joins,
-  CTEs, `UNION`, `ON CONFLICT`, `RETURNING` and row locking. Every value is
-  sent as a bound parameter.
+  CTEs, `UNION`, `ON CONFLICT`, `RETURNING` and row locking. Value methods bind
+  parameters; raw SQL methods insert the SQL you supply.
 - **`#[derive(PgKit)]`** generates a table type, a column enum and a partial
-  row from one row struct, so table and column names are checked by the
-  compiler instead of being scattered string literals.
-- **Pagination**: classic offset pagination, and keyset (cursor) pagination
-  with opaque cursors that are validated against the request they come back
-  with.
-- **`#[pgkit::retry]`** re-runs an async repository method on transient
-  failures such as deadlocks and serialization failures.
-- **`RepositoryError`** maps Postgres errors to variants like
-  `UniqueViolation` and `ForeignKeyViolation`, with the constraint name
-  attached.
-- **Migrations and seeds**: `migrator!` and `seeder!` find every
-  `migrations/` and `seeds/` folder under a path at compile time and embed
-  the SQL in the binary, so deploys ship no `.sql` files.
-- **Full-text search helper** that turns user input into a safe `to_tsquery`
-  string.
-- **Connection pool helper** that opens a `PgPool` with production-safe
-  defaults: session timeouts against runaway queries, a warm floor of idle
-  connections, and connection recycling.
+  row from one struct. Rust checks references to those generated types.
+- **Pagination** using `LIMIT` / `OFFSET` or a keyset cursor.
+- **`#[pgkit::retry]`** repeats an async function on selected transient errors.
+- **`RepositoryError`** classifies constraint violations, missing rows and
+  other database errors, preserving constraint names when available.
+- **Migrations and seeds** embedded from SQL files at compile time.
+- **Full-text search helper** for prefix-matching `to_tsquery` input.
+- **Connection pool helper** with configurable limits and session timeouts.
 
 ## Installation
 
 ```toml
 [dependencies]
-pgkit = "0.1"
-sqlx = { version = "0.9", features = ["postgres", "runtime-tokio", "tls-rustls"] }
+pgkit = "0.4"
+sqlx = { version = "0.9", default-features = false, features = ["postgres", "derive", "runtime-tokio", "tls-rustls"] }
 ```
 
 pgkit depends on sqlx without a runtime or TLS backend, so your application
 chooses those through its own sqlx features.
 
-Requires Rust 1.98 or newer.
+Requires Rust 1.94 or newer.
 
 ## Quick start
 
@@ -62,6 +47,7 @@ Describe a table once, with a plain struct:
 ```rust
 use pgkit::PgKit;
 use pgkit::query_builder::{Query, WhereOps};
+use pgkit::types::DatabaseTable;
 
 #[derive(PgKit)]
 #[pgkit(table_name = "geo_countries")]
@@ -70,23 +56,25 @@ pub struct CountriesRow {
     pub id: i32,
     pub iso2: String,
     pub name: String,
-    pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 // The derive generated `CountriesTable`, `CountriesColumn` and
 // `PartialCountriesRow`. Use them instead of string literals:
-let query = Query::select()
-    .from(CountriesTable)
+let query = CountriesTable::select()
     .columns([CountriesColumn::Id, CountriesColumn::Name])
     .where_eq(CountriesColumn::Iso2, "UG")
-    .where_null(CountriesColumn::DeletedAt)
     .build();
 
 assert_eq!(
     query.sql(),
-    "SELECT geo_countries.id, geo_countries.name FROM geo_countries WHERE geo_countries.iso2 = $1 AND geo_countries.deleted_at IS NULL"
+    "SELECT geo_countries.id, geo_countries.name FROM geo_countries WHERE geo_countries.iso2 = $1"
 );
 ```
+
+Two equivalent entry points, pick whichever you prefer:
+`CountriesTable::select()` (via the `DatabaseTable` trait) pre-fills the table
+name, while `Query::select().from(CountriesTable)` also accepts plain strings.
+Both exist for `select`, `insert`, `update` and `delete`.
 
 `build()` returns a regular `sqlx::QueryBuilder`, so anything sqlx can do with
 one is still available.
@@ -199,13 +187,14 @@ assert_eq!(
 
 ### Safety guards
 
-`UPDATE` and `DELETE` panic at build time if their `WHERE` clause ends up
-empty, so a condition lost in a refactor cannot silently rewrite or wipe a
-table. Call `.all()` to opt into a whole-table statement on purpose.
+`UPDATE` and `DELETE` panic when `.build()` sees an empty `WHERE` clause or
+one made entirely of conditions it recognizes as unconditional, such as empty
+`NOT IN` lists. Call `.all()` to allow these statements. This guard does not
+analyze raw SQL or prove that a predicate restricts the affected rows.
 
 Column and table names passed as strings are inserted into the SQL as written.
-Only pass names you control. Never build them from user input. Values are
-always bound as parameters.
+Use trusted names and raw SQL fragments. Methods such as `where_eq`, `value`
+and `set` bind values; in raw SQL closures, use `push_bind` for values.
 
 Because names go in as written, Postgres lowercases them unless quoted. For a
 mixed-case or reserved-word name, `quote_ident!` quotes it at compile time:
@@ -246,10 +235,10 @@ assert_eq!(
 );
 ```
 
-Cursor (keyset) pagination stays fast on large tables because it never uses
-`OFFSET`. pgkit adds the keyset predicate, a stable `ORDER BY` with the primary
-key as tiebreaker, and fetches one extra row to detect whether a next page
-exists:
+Cursor pagination adds a keyset predicate, an `ORDER BY` with the primary
+key as tiebreaker, and a limit for one extra row to detect the next page.
+It avoids `OFFSET`; performance depends on indexes and the query. Use it
+without a separate ordering, offset or pagination clause:
 
 ```rust
 use pgkit::PgKit;
@@ -292,9 +281,15 @@ fn main() -> Result<(), pgkit::pagination::cursor::CursorPaginationError> {
 ```
 
 After fetching, `pagination.into_response_parts(rows)` trims the extra row and
-returns the cursor for the next page, which you `encode()` and hand to the
-client. A cursor records the sort column, direction and active filters, so one
-that no longer matches the request is rejected instead of returning wrong rows.
+returns an optional next-page cursor to `encode()` for the client. Fetched rows
+must implement `PaginatedRow`; the derive implements it on the generated partial
+row. Select the primary key and ordering column so a next cursor can be built.
+
+Cursors contain URL-safe base64-encoded JSON, without encryption or a signature.
+Malformed cursors and known sort-value type mismatches return errors. A change
+in sort column, direction or filter fingerprint discards the cursor and restarts
+at page one. Filter checks cover only the filters you pass to the pagination
+constructor; pgkit does not extract them from the query.
 
 ## Retrying transient failures
 
@@ -312,11 +307,16 @@ impl CountriesRepository {
 }
 ```
 
-By default only errors where the statement definitely did not run are retried:
-pool and connection rejections, deadlocks (`40P01`) and serialization failures
-(`40001`). Failures that leave the outcome unknown, such as a dropped
-connection mid-statement, are retried only when you mark the method
-`idempotent`. Constraint violations and missing rows are never retried.
+By default, retries cover pool acquisition timeouts and SQLSTATEs `40001`
+(serialization failure), `40P01` (deadlock), `53300` (too many connections) and
+`57P03` (cannot connect now). I/O, TLS, worker crashes and `08…` connection
+errors are retried only with `idempotent`. Constraint violations and missing
+rows are not retried.
+
+Every retry repeats the whole function body. Earlier successful statements or
+external side effects are not undone by pgkit. Make the whole body safe to
+repeat, for example by using a transaction for related database writes.
+`idempotent` is your assertion of safety; pgkit does not verify it.
 
 The function must be `async` and return `RepositoryResult<T>`. It also works
 inside `#[async_trait]` impls. Backoff sleeps use `tokio::time::sleep`, so the
@@ -324,11 +324,17 @@ inside `#[async_trait]` impls. Backoff sleeps use `tokio::time::sleep`, so the
 
 ## Embedded migrations and seeds
 
-The `db-init` feature (off by default) discovers, validates and embeds a
-project's SQL at compile time. The convention is, any folder named `migrations`
-holds migrations, any folder named `seeds` holds seeds, at any depth. How you
-arrange the folders around them is up to you. One flat pair at the root, or
-one pair per module:
+Enable `db-init` to embed migrations and seeds:
+
+```toml
+pgkit = { version = "0.4", features = ["db-init"] }
+```
+
+Each macro takes a scan root relative to the calling crate's `Cargo.toml`.
+It finds descendant folders named `migrations` or `seeds` and embeds the
+`.sql` files directly inside them. Pass the parent of these folders, not the
+`migrations` or `seeds` folder itself. Subfolders inside a matching script
+folder are not scanned for that kind of script.
 
 ```text
 src/
@@ -351,27 +357,17 @@ pgkit::migrator!("src").run(&pool).await?; // an sqlx::migrate::Migrator
 pgkit::seeder!("src").run(&pool).await?;   // a pgkit::db_init::seeding::Seeder
 ```
 
-Each macro takes one path, relative to the crate's `Cargo.toml`, and walks it
-recursively. The SQL is embedded with `include_str!`, so the compiled binary
-needs no `.sql` files at runtime, and each migration is built the way
-`sqlx::migrate!` builds it, so the checksums recorded in `_sqlx_migrations`
-match.
+Migration files use `<14-digit version>_<name>.up.sql`. The macro checks file
+names and duplicate versions within its scan, then sorts by version. It accepts
+only up migrations; `.down.sql` files fail the build. SQL syntax is checked by
+PostgreSQL when run. Files starting with `-- no-transaction` run outside a
+transaction; otherwise each migration runs in its own transaction, not one
+transaction for the collection. SQLx tracks versions and SQL checksums in
+`_sqlx_migrations`. The checksums match SQLx's for the same SQL content.
 
-The file rules, enforced at compile time so a bad file fails the build
-instead of a deploy:
-
-- A migration is `<version>_<name>.up.sql`, where the version is the
-  14-digit timestamp `sqlx migrate add` generates. Versions must be unique
-  across the whole tree; the embedded set is sorted by version.
-- A migration starting with the line `-- no-transaction` runs outside a
-  transaction (for statements such as `CREATE INDEX CONCURRENTLY`).
-
-Seed names are not enforced. Seeds run in path order, so the recommended
-naming is a zero-padded number prefix (`001_roles.sql`, `002_users.sql`) to
-make the order within a folder explicit.
-
-Seeds have no `_sqlx_migrations`-style tracking: `Seeder::run` executes every
-script on every run, so write each script to be a no-op once its data exists:
+Seeds run in path order, without version tracking. Prefix names with numbers
+to control order within a folder. Every seed runs on every call, so make
+repeated runs safe:
 
 ```sql
 INSERT INTO plans (code, name)
@@ -379,33 +375,14 @@ SELECT 'standard', 'Standard'
 WHERE NOT EXISTS (SELECT 1 FROM plans);
 ```
 
-One failing script does not stop the rest: `Seeder::run` logs each failure
-through `tracing`, runs the remaining scripts, and returns every failure
-together as one `SeedErrors` list:
+`Seeder::run` attempts every script in slice order, logs failures, and returns
+them together in `SeedErrors`. It does not wrap the collection in a transaction.
 
-```rust,ignore
-if let Err(errors) = pgkit::seeder!("src").run(&pool).await {
-    for error in &errors.0 {
-        // "error executing seed billing/db/seeds/001_defaults.sql: ..."
-        eprintln!("{error}");
-    }
-}
-```
+### Merging collections from multiple crates
 
-The runtime types live in `pgkit::db_init::seeding`: `Seeder`, `Seed`
-(the embedded script — its `path` relative to the scan root, and its `sql`),
-`SeedError` and `SeedErrors`.
-
-When you want to compose things yourself, `migrations!` gives you the raw
-`Vec<sqlx::migrate::Migration>` and `seeds!` the `&'static [Seed]` that
-the two wrapper macros are built from.
-
-### Merging collections from multiple sources (crates)
-
-The raw forms compose across crates. Each macro resolves its path against
-the crate that invokes it and embeds the SQL into that crate's build, so a
-library can collect its own migrations and seeds and export the finished
-collections:
+`migrations!` returns a `Vec<sqlx::migrate::Migration>`; `seeds!` returns a
+`&'static [Seed]`. A dependency can export these collections. It embeds its
+own SQL when compiled, so the application does not need to locate its files:
 
 ```rust,ignore
 // In the library crate — "db" is relative to *its* Cargo.toml.
@@ -416,54 +393,55 @@ pub fn migrations() -> Vec<sqlx::migrate::Migration> {
 pub const SEEDS: &[pgkit::db_init::seeding::Seed] = pgkit::seeds!("db");
 ```
 
-The application merges the collections and runs them as one migrator, so
-`_sqlx_migrations` stays a single history with every crate's migrations
-interleaved by timestamp:
+Merge dependency and application migrations before running them:
 
 ```rust,ignore
 let mut all = billing::migrations();
 all.extend(users::migrations());
 all.extend(pgkit::migrations!("src"));
 
-// The compile-time duplicate-version check is per collection; repeat it
-// across the merge. (The sort is only for this check — the migrator
-// sorts on its own.)
+// Check versions across all collections before running any SQL.
 all.sort_by_key(|m| m.version);
-assert!(all.windows(2).all(|w| w[0].version != w[1].version));
+assert!(
+    all.windows(2).all(|w| w[0].version != w[1].version),
+    "duplicate migration version",
+);
 
 pgkit::db_init::migrating::migrator(all).run(&pool).await?;
 ```
 
-Seeds need no merging: the `Seeder` tracks nothing, so running one seeder
-per collection, one after another, covers the same scripts. The difference
-is failure behavior: one `Seeder` runs every script and returns all
-failures together, while `?` on the first run above stops the later
-collections — collect the results instead of `?`-ing each if you want
-every collection attempted:
+Versions must be globally unique. The migrator sorts by version, so append
+order does not control execution: coordinate versions when migrations depend
+on another crate's schema. Each migration keeps its own history entry.
+
+For one combined seeder, store the merged seeds in a `OnceLock` to satisfy
+`Seeder::new`'s `&'static [Seed]` requirement:
 
 ```rust,ignore
-pgkit::db_init::seeding::Seeder::new(billing::SEEDS).run(&pool).await?;
-pgkit::seeder!("src").run(&pool).await?;
+use std::sync::OnceLock;
+use pgkit::db_init::seeding::{Seed, Seeder};
+
+static ALL_SEEDS: OnceLock<Vec<Seed>> = OnceLock::new();
+
+let seeds = ALL_SEEDS.get_or_init(|| {
+    let mut all = billing::SEEDS.to_vec();
+    all.extend_from_slice(users::SEEDS);
+    all.extend_from_slice(pgkit::seeds!("src"));
+    all
+});
+Seeder::new(seeds.as_slice()).run(&pool).await?;
 ```
 
-Three things to watch:
+Alternatively, run separate seeders in order. Using `?` stops later collections
+when an earlier one fails; a combined seeder attempts all scripts.
 
-- The unique-version check runs per macro invocation, not across the merge.
-  A collision between two crates fails at run time instead of at build
-  time: a pending duplicate errors mid-migration (`_sqlx_migrations` keys
-  on the version), and a duplicate of an already-applied version with
-  different SQL is a checksum mismatch. Hence the assertion in the example
-  above.
-- A published library must ship its `.sql` files: mind any `include` or
-  `exclude` list in its `Cargo.toml` that would drop them from the package.
-- Removing a library later leaves its rows in `_sqlx_migrations`, and the
-  merged migrator then fails validation at startup. `sqlx` provides
-  `Migrator::set_ignore_missing(true)` for exactly that.
+Published dependencies must include their `.sql` files in the package. Keep
+previously applied migrations in the merged collection: missing versions fail
+SQLx's default validation. `set_ignore_missing(true)` disables that missing-version
+check; it does not undo a removed dependency's schema.
 
-One caveat comes with any file-embedding macro, and sqlx documents the same
-for `migrate!`: editing an embedded file recompiles automatically, but
-_adding or removing_ a file does not — the cached expansion is reused. Give
-the crate a two-line `build.rs` so the tree is watched:
+Embedded file edits trigger recompilation. To also detect added or removed
+files, add a `build.rs` in each crate that scans SQL, watching its scan root:
 
 ```rust,ignore
 fn main() {
@@ -501,9 +479,11 @@ fn map_create_result(result: RepositoryResult<Vendor>) -> Result<Vendor, AppErro
 
 ## Full-text search
 
-`build_tsquery` turns free text into a prefix-matching `to_tsquery` string.
-Query operators are stripped from each term, so user input cannot inject
-syntax, and at most `MAX_TERMS` terms are used:
+`build_tsquery` splits text on whitespace, strips tsquery operator characters,
+adds `:*` to each remaining term, and joins up to
+[`MAX_TERMS`](https://docs.rs/pgkit/latest/pgkit/full_text_search/constant.MAX_TERMS.html)
+terms with
+`&`. It returns `None` if no terms remain. Bind the result as a SQL parameter:
 
 ```rust
 use pgkit::full_text_search::build_tsquery;
@@ -536,43 +516,32 @@ async fn connect() -> Result<sqlx::PgPool, sqlx::Error> {
 }
 ```
 
-The defaults are meant for a server answering requests: a 30-second
-`statement_timeout` and a 60-second `idle_in_transaction_session_timeout` are
-set on every session, so a runaway query or an abandoned transaction cannot
-hold a pooled connection and exhaust the pool. Connections are recycled after
-30 minutes, idle ones closed after 10, and a small warm floor (a quarter of
-`max_connections`, at most 5) is kept open.
+Defaults and the minimum target for open connections are documented on the
+corresponding
+[`PoolConfig`](https://docs.rs/pgkit/latest/pgkit/pool/struct.PoolConfig.html)
+field. Session timeouts limit long statements and idle transactions; they do
+not prevent pool exhaustion.
 
-The session timeouts follow Postgres's own convention: `Duration::ZERO`
-disables one. A migration runner wants both off, so a long migration is not
-killed mid-flight:
+`Duration::ZERO` disables either session timeout. For migrations that need
+longer than the defaults, adjust or disable them:
 
-```rust,no_run
+```rust
 use std::time::Duration;
-use pgkit::pool::{self, PoolConfig};
-use sqlx::postgres::PgConnectOptions;
+use pgkit::pool::PoolConfig;
 
-async fn migration_pool() -> Result<sqlx::PgPool, sqlx::Error> {
-    let options = PgConnectOptions::new()
-        .host("localhost")
-        .port(5432)
-        .username("app")
-        .password("password")
-        .database("app");
-
-    pool::get(options, PoolConfig {
-        max_connections: 2,
-        statement_timeout: Duration::ZERO,
-        idle_tx_timeout: Duration::ZERO,
-        ..PoolConfig::default()
-    })
-    .await
-}
+let config = PoolConfig {
+    max_connections: 2,
+    statement_timeout: Duration::ZERO,
+    idle_tx_timeout: Duration::ZERO,
+    ..PoolConfig::default()
+};
 ```
 
 ## Feature flags
 
-All of these are on by default, except `db-init`.
+Defaults enable `partial-row`, `pagination`, `repository-error` and `retry`.
+`pagination` enables both pagination features; `cursor-pagination` also enables
+`serde`. `db-init` is opt-in.
 
 | Feature             | Provides                                                                                       |
 | ------------------- | ---------------------------------------------------------------------------------------------- |
@@ -583,13 +552,13 @@ All of these are on by default, except `db-init`.
 | `repository-error`  | `errors::RepositoryError`; its `CursorPagination` variant only exists with `cursor-pagination` |
 | `retry`             | `#[pgkit::retry]` and `retry::run` (needs Tokio)                                               |
 | `serde`             | `Serialize` / `Deserialize` for `OrderByDirection` and similar                                 |
-| `db-init`           | `migrator!` / `seeder!` and `db_init` — off by default                                         |
+| `db-init`           | `migrations!`, `migrator!`, `seeds!`, `seeder!` and `db_init`                                  |
 
 The query builder, `ordering`, `projection`, `pool` and `full_text_search`
 are always available. To use only the query builder:
 
 ```toml
-pgkit = { version = "0.1", default-features = false }
+pgkit = { version = "0.4", default-features = false }
 ```
 
 ## Crates in this repository

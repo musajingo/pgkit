@@ -24,8 +24,7 @@
 //! ```
 //!
 //! The SQL table name lives in the `DatabaseTable::NAME` associated
-//! constant, its single home. `DatabaseTableColumn::qualified` reads it
-//! back to render a table-prefixed column reference
+//! constant. `ColumnRef::from` reads it to render a table-prefixed column reference
 //! (`geo_countries.name`), so the column enum never carries the name
 //! itself. The struct is a bare type marker; nothing depends on it being
 //! constructible.

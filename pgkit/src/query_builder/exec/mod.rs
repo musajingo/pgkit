@@ -18,7 +18,16 @@
 //! # Ok(()) }
 //! ```
 //!
-//! To stream call the `.build().build_query_as::<T>().fetch(&pool)`.
+//! To stream, keep the query builder alive until the stream is consumed:
+//!
+//! ```no_run
+//! # use pgkit::query_builder::Query;
+//! # fn demo(pool: &sqlx::PgPool) {
+//! let mut query = Query::select().from("users").column("id").build();
+//! let rows = query.build_query_as::<(i32,)>().fetch(pool);
+//! # drop(rows);
+//! # }
+//! ```
 
 mod build_query;
 mod build_query_as;

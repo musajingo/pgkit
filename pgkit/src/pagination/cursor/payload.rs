@@ -10,7 +10,8 @@ use crate::ordering::OrderByDirection;
 
 /// The pieces that make up a cursor.
 ///
-/// Generic over `Col` (the sorting columns) and `Id` (primary key type; typically an integer or UUID).
+/// Generic over `Col` (the sorting columns) and `Id` (primary key type).
+/// Encoding is URL-safe base64 of JSON, without encryption or authentication.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CursorPayload<Col, Id> {
     /// The SQL column name used for ordering (e.g., "created_at").
@@ -84,7 +85,7 @@ impl<Col, Id> CursorPayload<Col, Id> {
 }
 
 impl<Col: Serialize, Id: Serialize> CursorPayload<Col, Id> {
-    /// Serialize the payload into an opaque, URL-safe cursor string.
+    /// Serialize the payload as URL-safe base64-encoded JSON.
     ///
     /// # Errors
     /// Returns a [`CursorPaginationError`] if JSON serialization fails.
@@ -95,7 +96,7 @@ impl<Col: Serialize, Id: Serialize> CursorPayload<Col, Id> {
 }
 
 impl<Col: DeserializeOwned, Id: DeserializeOwned> CursorPayload<Col, Id> {
-    /// Decode an opaque cursor string back into a payload.
+    /// Decode base64-encoded JSON without checking it against a query.
     ///
     /// # Errors
     /// Returns a [`CursorPaginationError`] if base64 decoding, UTF-8

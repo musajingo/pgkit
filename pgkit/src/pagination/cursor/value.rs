@@ -6,9 +6,9 @@
 //! handed to the client), and feed it back into the next query's keyset
 //! `WHERE`.
 //!
-//! `CursorValue` is that remembered value: a small, closed set of the
-//! column types that can serve as a cursor sort key. Every variant has a
-//! total SQL ordering and a faithful, round-trip encode/decode.
+//! `CursorValue` carries the supported scalar, JSON and enum sort values.
+//! The column must support the comparisons used by the keyset query.
+//! Non-finite floats cannot round-trip through the cursor's JSON encoding.
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use rust_decimal::Decimal;
@@ -41,8 +41,8 @@ pub enum CursorValue {
     /// 64-bit unsigned integer.
     ///
     /// Postgres has no unsigned 64-bit type, so this is bound as `BIGINT`
-    /// (`i64`). Values ≥ 2^63 do **not** roundtrip; they wrap to negative and
-    /// mis-order. Unreachable in practice (no Postgres column decodes to `u64`).
+    /// (`i64`). Only values up to `i64::MAX` can be bound correctly. Larger
+    /// values panic in debug builds and wrap to negative values in release builds.
     BigUnsigned(u64),
 
     /// `REAL`.
@@ -67,7 +67,7 @@ pub enum CursorValue {
     /// `TIMESTAMPTZ` (timestamp with time zone).
     DateTimeUtc(DateTime<Utc>),
 
-    /// `JSON` / `JSONB`.
+    /// A JSON value, bound as `JSONB`. The column must support ordering comparisons.
     Json(serde_json::Value),
 
     /// A Postgres `enum`-typed column value, carried as its text label
@@ -128,6 +128,10 @@ cursor_value_from!(serde_json::Value => Json);
 
 impl CursorValue {
     /// Push `self` as a bound parameter into `sqlx::QueryBuilder`.
+    ///
+    /// # Panics
+    /// Panics for `Enum`, which requires the keyset query's column-specific
+    /// cast path, and in debug builds for `BigUnsigned` above `i64::MAX`.
     pub fn push_bind_to(self, qb: &mut QueryBuilder<Postgres>) {
         match self {
             Self::Bool(v) => {
@@ -238,9 +242,8 @@ fn is_type<T: Type<Postgres>>(ty: &PgTypeInfo) -> bool {
 }
 
 /// Classifies a column's Postgres type, or `None` for one that maps to no
-/// [`CursorValue`] variant at all (arrays, `bytea`, network types, …); those
-/// are left unclassified rather than guessed at, so an unfamiliar column type
-/// can never reject a cursor the library itself minted.
+/// [`CursorValue`] variant at all (arrays, `bytea`, network types, …).
+/// Unclassified column types bypass the value-kind check.
 fn column_kind(ty: &PgTypeInfo) -> Option<ValueKind> {
     // Built-in types carry a static OID; a type sqlx knows only by name (a
     // Postgres `enum`, composite or domain) resolves one at runtime.
@@ -309,12 +312,10 @@ impl CursorValue {
         self.kind().as_str()
     }
 
-    /// Whether a column of `column_type` could have produced this value.
+    /// Whether the value and column belong to the same broad type class.
     ///
-    /// A cursor is minted from the sort column's own Rust type, so a
-    /// legitimate value always shares its column's class. A crafted or stale
-    /// one need not, and binding it would make PostgreSQL fail with a cast or
-    /// missing-operator error rather than a clean rejection.
+    /// All numeric types share one class. Unclassified column types pass;
+    /// this does not validate numeric ranges or individual enum labels.
     pub(crate) fn fits_column(&self, column_type: &PgTypeInfo) -> bool {
         column_kind(column_type).is_none_or(|kind| kind == self.kind())
     }

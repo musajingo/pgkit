@@ -4,11 +4,10 @@ use super::error::CursorPaginationError;
 
 const SIGNATURE_HEX_LEN: usize = 16;
 
-/// Computes a stable 16-char (64-bit) hex signature from the filters.
+/// Hashes the filters' JSON serialization into a 16-character fingerprint.
 ///
-/// Coherence fingerprint, not a cryptographic hash: it only detects whether a
-/// cursor's filters changed since it was minted, so 64 bits is ample and the
-/// full SHA-256 width is intentionally truncated.
+/// Uses the first 64 bits of SHA-256. Equal JSON produces equal fingerprints;
+/// serialization order matters. This is not a signature or authentication check.
 pub(crate) fn compute_filters_signature<F>(filters: &F) -> Result<String, CursorPaginationError>
 where
     F: serde::Serialize + ?Sized,

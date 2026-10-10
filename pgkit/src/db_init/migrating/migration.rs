@@ -3,7 +3,8 @@ use std::borrow::Cow;
 use sqlx::SqlStr;
 use sqlx::migrate::{Migration, MigrationType};
 
-/// Build a single [`Migration`]
+/// Builds an up [`Migration`] with SQLx's SQL checksum.
+/// Does not validate the SQL or check version uniqueness.
 pub fn migration(
     version: i64,
     description: &'static str,

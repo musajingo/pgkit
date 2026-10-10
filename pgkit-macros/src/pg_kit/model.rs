@@ -57,7 +57,7 @@ pub(crate) struct Model {
     pub table_name: String,
     /// Items the user asked us not to emit.
     pub skip: SkipFlags,
-    /// Every non-skipped field of the source struct.
+    /// Every field of the source struct; field-level skipping is not supported.
     pub fields: Vec<ModelField>,
     /// Index into [`Self::fields`] of the `#[pgkit(primary_key)]` field.
     pub primary_key_index: usize,

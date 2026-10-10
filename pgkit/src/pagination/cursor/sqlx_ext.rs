@@ -1,6 +1,6 @@
 //! Cursor pagination extension for raw [`sqlx::QueryBuilder`].
 //!
-//! For the [`SelectBuilder`] integration, see
+//! For the select-builder integration, see
 //! [`crate::query_builder::SelectBuilder::cursor_paginate`].
 
 use sqlx::{Encode, Postgres, QueryBuilder, Type};
@@ -18,8 +18,11 @@ pub trait SqlxCursorPaginationExt<'a>: Sized {
     /// is present), then ` ORDER BY <col>, <pk>` with matching
     /// `NULLS FIRST/LAST`, then ` LIMIT $n`.
     ///
-    /// The predicate is joined with `AND` when the query already has a
-    /// `WHERE` and opens one when it does not.
+    /// Chooses `AND` or `WHERE` by searching the existing SQL for ` WHERE `
+    /// case-insensitively. This is not a SQL parser: subqueries, comments or
+    /// other whitespace can confuse detection. Prefer the select-builder
+    /// integration for composed queries. Call before adding ordering, limits
+    /// or offsets, and ensure the selected rows include the PK and sort column.
     fn cursor_paginate<T, Id>(&mut self, pagination: &CursorPagination<T, Id>) -> &mut Self
     where
         T: DatabaseTableColumn + ColumnTypeInfo + Copy,

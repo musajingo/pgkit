@@ -6,55 +6,47 @@ mod retry;
 
 /// Derives a table type, a column enum, and a partial row from a row struct.
 ///
-/// The `PgKit` derive generates the pieces you need to work with a table:
-/// - A table unit struct implementing `DatabaseTable`; it carries the SQL
-///   table name as the `NAME` associated constant
-/// - A columns enum implementing `DatabaseTableColumn`, deriving `strum`
-///   (`IntoStaticStr` + `VariantNames`, plus `Display` + `EnumString`) so
-///   the SQL column names live on the enum itself
-/// - A partial row + `FromRow` for fetching a partial row data from the DB,
-///   implementing `PaginatedRow` (parameterized by the column enum) to be
-///   used in cursor pagination
+/// Generates a `DatabaseTable` unit struct, a `DatabaseTableColumn` enum,
+/// and a partial row with `sqlx::FromRow` and `PaginatedRow` implementations.
+/// Does not create a table, check the database schema, or implement `FromRow`
+/// on the original struct. Derive `sqlx::FromRow` separately when needed.
 ///
-/// All of these are generated from a single source-of-truth struct,
-/// which also serves as the complete row representation for the table.
+/// Requires a concrete struct with named fields, one primary-key field and
+/// a table name. Available through `pgkit` with both `partial-row` and
+/// `cursor-pagination` enabled.
 ///
 /// # Container attributes
 ///
 /// On the struct, inside `#[pgkit(...)]`:
 ///
-/// | Key                                            | Purpose                                                                                          |
-/// |------------------------------------------------|--------------------------------------------------------------------------------------------------|
-/// | `table_name = "..."`                           | **Required.** SQL table name (e.g. `"geo_countries"`).                                           |
-/// | `table = "Ident"`                              | Override the table unit struct ident. Default: source ident with `Row` stripped, then `Table`.   |
-/// | `columns = "Ident"`                            | Override the column enum ident. Default: source ident with `Row` stripped, then `Column`.        |
-/// | `partial = "Ident"`                            | Override the partial struct ident. Default: `Partial` + the full source ident.                   |
-/// | `skip(partial, paginated_row)`                 | Don't emit the listed artifacts. `skip(table)` and `skip(columns)` are rejected; both are       |
-/// |                                                | structural, derived from the row and `table_name` and named by each other's trait impls.         |
+/// | Key | Purpose |
+/// | --- | --- |
+/// | `table_name = "..."` | Required SQL table name. |
+/// | `table = "Ident"` | Table type name; defaults to the struct name minus trailing `Row`, plus `Table`. |
+/// | `columns = "Ident"` | Column enum name; defaults to the struct name minus trailing `Row`, plus `Column`. |
+/// | `partial = "Ident"` | Partial row name; defaults to `Partial` plus the full struct name. |
+/// | `skip(partial, paginated_row)` | Omit either or both; skipping the partial also omits its pagination impl. Table and columns cannot be skipped. |
 ///
 /// # Field attributes
 ///
-/// | Attribute                  | Effect                                                                         |
-/// |----------------------------|--------------------------------------------------------------------------------|
-/// | `#[pgkit(primary_key)]`    | **Required exactly once.** Field type becomes `DatabaseTable::primary_key()`'s |
-/// |                            | column variant and `PaginatedRow<Id, _>`'s `Id`.                               |
-/// | `#[pgkit(rename = "...")]` | Set the SQL column name explicitly. Drives both the partial's `FromRow` lookup |
-/// |                            | and the column enum's rendered name. Needed only when the SQL column differs   |
-/// |                            | from the Rust field ident.                                                     |
-/// | `#[pgkit(json)]`           | Mark a JSON/JSONB column. Its cursor value is carried as `CursorValue::Json`   |
-/// |                            | (the field type need only be `Serialize`), instead of requiring                |
-/// |                            | `From<T> for CursorValue`, which a foreign newtype can't supply (orphan rule). |
+/// | Attribute | Effect |
+/// | --- | --- |
+/// | `#[pgkit(primary_key)]` | Required on exactly one field; selects the PK column and pagination ID type. |
+/// | `#[pgkit(rename = "...")]` | Sets the SQL column name and partial-row lookup name. |
+/// | `#[pgkit(json)]` | Converts cursor values through `serde_json::to_value` instead of `CursorValue::from`. |
 ///
 /// Keys can share one attribute: `#[pgkit(primary_key, rename = "country_id")]`.
 ///
-/// The SQL column name is the field ident verbatim (or the `rename` value);
-/// every column-enum variant pins it with an explicit
-/// `#[strum(serialize = "...")]` + `#[serde(rename = "...")]`, so the rendered
-/// SQL name and the partial's `FromRow` lookup can never diverge.
+/// SQL column names use the field name or `rename` value for both the enum
+/// and partial-row lookup. Names are emitted without SQL quoting; supply
+/// trusted names appropriate for the database schema.
 ///
-/// The above is about *column* names. The derived *type* names
-/// (table/columns/partial) follow the defaults tabulated in the
-/// `pg_kit::model` module.
+/// All fields need SQLx Postgres type information. Generated partial fields
+/// also need `Debug`, `Clone` and SQLx decoding. Nullable fields become
+/// `Option<Option<T>>`: the outer option records projection, the inner SQL NULL.
+/// Cursor extraction requires `From<T> for CursorValue` for each field's
+/// non-nullable type, unless marked `json` or pagination is skipped. A `json`
+/// field needs `Serialize`; serialization errors currently become JSON null.
 ///
 /// Other attributes (`#[sqlx(...)]`, `#[serde(...)]`, `#[doc = ...]`) are
 /// ignored by this derive. If a column needs renaming in `sqlx`'s derive
@@ -84,13 +76,14 @@ mod retry;
 /// }
 ///
 /// // Emits:
-/// //   pub struct CountryTable;         (impl DatabaseTable)
+/// //   pub struct CountryTable;         (impl DatabaseTable: CountryTable::select()/insert()/update()/delete())
 /// //   pub enum   CountryColumn { Id, Iso2, Name, Region, Deleted } (impl DatabaseTableColumn)
 /// //   pub struct PartialCountryRow { id: Option<i32>, …, deleted: Option<Option<DateTime<Utc>>> }
 /// //   impl sqlx::FromRow<PgRow>             for PartialCountryRow
 /// //   impl PaginatedRow<i32, CountryColumn> for PartialCountryRow
 ///
 /// assert_eq!(CountryTable::NAME, "geo_countries");
+/// assert_eq!(CountryTable::select().all().build().sql(), "SELECT * FROM geo_countries");
 /// assert_eq!(CountryColumn::Deleted.to_string(), "deleted_at");
 /// assert!(PartialCountryRow::default().id.is_none());
 /// ```
@@ -109,13 +102,14 @@ pub fn derive_pg_kit(input: TokenStream) -> TokenStream {
 ///
 /// # Retry safety
 ///
-/// By default only errors where the statement **definitely did not apply**
-/// are retried: pool/connect rejections, deadlocks (`40P01`), and
-/// serialization failures (`40001`). Mid-statement failures (I/O, TLS,
-/// dropped connections) are ambiguous (the database may have committed the
-/// work before the link died), so they are only retried when the method is
-/// marked `idempotent`, which asserts re-executing is safe. See
-/// `RepositoryError::retry_safety`.
+/// Defaults retry pool acquisition timeouts and SQLSTATEs `40001`, `40P01`,
+/// `53300` and `57P03`. I/O, TLS, worker crashes and `08…` connection errors
+/// require `idempotent`. Constraint violations and missing rows are not retried.
+///
+/// Every retry repeats the whole body. Earlier successful statements and
+/// external side effects are not undone. Make the whole body safe to repeat;
+/// `idempotent` is your assertion, not a check performed by pgkit. Backoff
+/// sleeps require a Tokio runtime with time enabled.
 ///
 /// # Arguments
 ///
@@ -165,9 +159,9 @@ pub fn retry(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Embeds a project's migrations as a `Vec<sqlx::migrate::Migration>`.
 ///
 /// Takes the scan root as a string literal, relative to `CARGO_MANIFEST_DIR`,
-/// and walks it recursively: every `.sql` file directly inside a folder named
-/// `migrations` is a migration, at any depth. The layout around those folders
-/// is yours — one flat folder or one per module both work:
+/// and finds descendant folders named `migrations`. Only `.sql` files directly
+/// inside those folders are collected. Pass their parent as the scan root;
+/// the scan root itself is not treated as a migration folder:
 ///
 /// ```text
 /// src/
@@ -179,14 +173,18 @@ pub fn retry(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// Each file must be named `<14-digit version>_<name>.up.sql` (the version is
 /// the timestamp `sqlx migrate add` generates); versions must be unique across
-/// the whole tree. A file starting with `-- no-transaction` runs outside a
-/// transaction.
-/// The SQL is embedded with `include_str!`, so the binary needs no files at
-/// runtime, and each migration is built the way `sqlx::migrate!` builds it,
-/// so checksums of applied migrations match.
+/// the scan. Down-migration files are not accepted. SQL syntax is not checked.
+/// A file starting with `-- no-transaction` runs outside a transaction;
+/// otherwise each migration runs in its own transaction.
+/// SQL is embedded with `include_str!`; no SQL files are needed at runtime.
+/// Checksums match SQLx's for the same SQL content.
 ///
-/// A new file only re-expands the macro if the crate's `build.rs` watches the
-/// tree: `println!("cargo::rerun-if-changed=src");`.
+/// Merge the returned vectors to compose collections from dependencies.
+/// Check version uniqueness across the merge before constructing a migrator.
+/// Enable `pgkit`'s `db-init` feature in calling crates.
+///
+/// To detect added or removed files, have the crate's `build.rs` watch the
+/// scan root, e.g. `println!("cargo::rerun-if-changed=src");`.
 #[proc_macro]
 pub fn migrations(input: TokenStream) -> TokenStream {
     db_init::migrations(input)
@@ -205,11 +203,11 @@ pub fn migrator(input: TokenStream) -> TokenStream {
 /// Embeds a project's seeds as a `&'static [pgkit::db_init::seeding::Seed]`.
 ///
 /// Takes the scan root as a string literal, relative to `CARGO_MANIFEST_DIR`,
-/// and walks it recursively: every `.sql` file directly inside a folder named
-/// `seeds` is a seed, at any depth. Naming is not enforced; files run in
-/// path order, so a zero-padded number prefix (`001_roles.sql`,
-/// `002_users.sql`) is the recommended way to control the order within a
-/// folder. The expression is const, so it can sit in a `static`.
+/// and finds descendant folders named `seeds`. Only `.sql` files directly
+/// inside those folders are collected; pass their parent as the scan root.
+/// No filename format is enforced. Seeds are sorted by path; numbered prefixes
+/// control order within a folder. The expression can be used in a `const`
+/// or `static`. Enable `pgkit`'s `db-init` feature in calling crates.
 ///
 /// The same `build.rs` note as [`migrations!`] applies.
 #[proc_macro]

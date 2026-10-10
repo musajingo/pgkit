@@ -24,6 +24,10 @@ use crate::errors::RepositoryResult;
 /// # Ok(()) }
 /// ```
 ///
+/// Each attempt calls the whole operation again. This function does not undo
+/// earlier statements or external side effects; the operation must be safe
+/// to repeat even when only its final statement failed.
+///
 /// [`RepositoryError::is_retryable`]: crate::errors::RepositoryError::is_retryable
 pub async fn run<T, F, Fut>(policy: RetryPolicy, mut op: F) -> RepositoryResult<T>
 where

@@ -105,7 +105,8 @@ impl<'a> SelectBuilder<'a> {
     }
 
     /// `FROM <raw>`: escape hatch for subqueries, `VALUES`, `LATERAL`, etc.
-    /// Mutually exclusive with [`from`](Self::from).
+    /// Overrides tables added through [`from`](Self::from). Repeated calls
+    /// replace the previous raw source.
     pub fn from_raw<F>(mut self, callback: F) -> Self
     where
         F: FnOnce(&mut QueryBuilder<Postgres>) + Send + 'a,
@@ -355,6 +356,8 @@ impl<'a> SelectBuilder<'a> {
     }
 
     /// Fetch a related resource's columns using `INNER JOIN`.
+    /// Aliases columns as `<table>_<column>` for the generated partial row's
+    /// `from_included_columns`. Adds `IS NULL` for a declared soft-delete column.
     pub fn include<C2, L>(self, columns: ColumnSelection<C2>, on_left: L, on_right: C2) -> Self
     where
         C2: DatabaseTableColumn,
@@ -405,8 +408,8 @@ impl<'a> SelectBuilder<'a> {
         self
     }
 
-    /// Fetch a related resource's columns using `LEFT JOIN`.
-    /// (Related resource might be absent)
+    /// Fetch a possibly absent resource using `LEFT JOIN`.
+    /// Uses the same projection aliases and soft-delete filter as [`include`](Self::include).
     pub fn include_nullable<C2, L>(
         self,
         columns: ColumnSelection<C2>,
@@ -463,6 +466,7 @@ impl<'a> SelectBuilder<'a> {
     }
 
     /// Like [`include`](Self::include) but you build the `ON` predicate.
+    /// Does not add a soft-delete filter automatically.
     pub fn include_with<C2, F>(self, columns: ColumnSelection<C2>, on: F) -> Self
     where
         C2: DatabaseTableColumn,
@@ -472,6 +476,7 @@ impl<'a> SelectBuilder<'a> {
     }
 
     /// Like [`include_nullable`](Self::include_nullable) but you build the `ON` predicate.
+    /// Does not add a soft-delete filter automatically.
     pub fn include_nullable_with<C2, F>(self, columns: ColumnSelection<C2>, on: F) -> Self
     where
         C2: DatabaseTableColumn,
@@ -599,6 +604,9 @@ impl<'a> SelectBuilder<'a> {
     /// Apply cursor pagination: adds the keyset WHERE predicate (if the
     /// cursor is present), an `ORDER BY <col>, <pk>` tiebreaker, and a
     /// `LIMIT` of [`crate::pagination::cursor::CursorPagination::fetch_limit`].
+    /// Appends ordering to any existing ordering and replaces the limit;
+    /// an existing offset is retained. Use without other ordering or pagination
+    /// clauses, and select both the primary key and ordering column.
     ///
     /// # Example
     ///

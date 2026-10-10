@@ -16,6 +16,7 @@
 //! | `CheckViolation`       | `CheckViolation`          |
 //! | `NotNullViolation`     | `Required`                |
 //! | `RowNotFound`          | `RowNotFound`             |
+//! | SQLSTATE `22P02`       | `InvalidTextRepresentation` |
 //! | Other                  | `Sqlx`                    |
 
 use sqlx::Error as SqlxError;
@@ -146,7 +147,8 @@ pub enum RepositoryError {
 }
 
 impl RepositoryError {
-    /// Classifies how safe it is to re-execute the failed operation.
+    /// Classifies the failed statement or connection attempt for retries.
+    /// Does not account for earlier successful work in the operation.
     ///
     /// Only [`Sqlx`](Self::Sqlx) errors can be retryable, and only when the
     /// underlying cause is transient; every other variant describes an

@@ -100,12 +100,13 @@ impl<'a> DeleteBuilder<'a> {
     // ––– Terminal: render –––
 
     /// Render into a fresh [`sqlx::QueryBuilder`]. Chain sqlx terminals
-    /// (`.build_query()`, `.build_query_as()`, etc.) on the result.
+    /// (`.build()`, `.build_query_as()`, etc.) on the result.
     ///
     /// # Panics
     ///
     /// - If [`from`](Self::from) was never called.
-    /// - If the WHERE clause is empty and [`all`](Self::all) was not called.
+    /// - If the WHERE clause is empty or every condition is recognized as
+    ///   unconditional, and [`all`](Self::all) was not called.
     pub fn build(self) -> QueryBuilder<Postgres> {
         let table = self
             .table

@@ -35,7 +35,7 @@ impl<'a> InsertRow<'a> {
         self
     }
 
-    /// Bind a raw expression for this row, e.g. `r.bind_raw(|q| q.push("NOW()"))`.
+    /// Bind a raw expression for this row, e.g. `r.bind_raw(|q| { q.push("NOW()"); })`.
     pub fn bind_raw<F>(mut self, callback: F) -> Self
     where
         F: FnOnce(&mut QueryBuilder<Postgres>) + Send + 'a,

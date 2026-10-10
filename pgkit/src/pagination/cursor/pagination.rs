@@ -27,6 +27,11 @@ pub type ResponseParts<R, T, Id> =
 /// returns `effective_limit + 1` to detect whether next page exists.
 ///
 /// Generic over `T` (sorting columns) and `Id` (primary key type).
+///
+/// A cursor with a different column, direction or filter fingerprint is
+/// discarded, restarting at page one. Malformed cursors and known value-type
+/// mismatches return errors. Filter checks use only the supplied `filters`;
+/// they are not inferred from SQL. Cursors are not signed or encrypted.
 #[derive(Debug, Clone)]
 pub struct CursorPagination<T, Id = uuid::Uuid> {
     ordering: OrderBy<T>,
@@ -61,6 +66,7 @@ impl<T, Id> CursorPagination<T, Id> {
 
     /// Constructs a [`CursorPagination`] assuming the ordering column
     /// was already found in the selected columns.
+    /// A requested limit of zero uses the default of 20.
     pub fn with_validated_column_selection<F>(
         ordering: OrderBy<T>,
         limit: u32,
@@ -139,7 +145,7 @@ impl<T, Id> CursorPagination<T, Id> {
         Ok(Some(decoded))
     }
 
-    /// Clamped limit.
+    /// Requested limit capped at the page-size cap (see [`crate::pagination`]).
     pub fn effective_limit(&self) -> u32 {
         self.limit.min(MAX_PAGE_SIZE)
     }
@@ -333,7 +339,9 @@ mod tests {
             None,
             None,
         )?;
-        assert_eq!(c.effective_limit(), MAX_PAGE_SIZE);
+        // The literal pins the cap documented on crate::pagination; a change
+        // to MAX_PAGE_SIZE must update that doc with it.
+        assert_eq!(c.effective_limit(), 256);
         Ok(())
     }
 
@@ -369,7 +377,10 @@ mod tests {
             None,
             None,
         )?;
-        assert_eq!(c.effective_limit(), DEFAULT_CURSOR_LIMIT);
+        // The literal pins the default documented on
+        // with_validated_column_selection; a change to DEFAULT_CURSOR_LIMIT
+        // must update that doc with it.
+        assert_eq!(c.effective_limit(), 20);
         Ok(())
     }
 

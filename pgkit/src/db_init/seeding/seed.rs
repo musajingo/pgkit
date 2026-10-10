@@ -1,8 +1,8 @@
 /// A single seed script.
 #[derive(Debug, Clone, Copy)]
 pub struct Seed {
-    /// Path to the seed file
+    /// Label for diagnostics; the macro uses the path relative to its scan root.
     pub path: &'static str,
-    /// Content (sql) of the seed file
+    /// SQL to execute. No file is read at runtime.
     pub sql: &'static str,
 }
