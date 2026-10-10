@@ -10,7 +10,7 @@
 //! snapshots with:
 //!
 //! ```bash
-//! TRYBUILD=overwrite cargo test -p pgkit-derive-tests --test compile_fail
+//! TRYBUILD=overwrite cargo test -p pgkit-macros-tests --test compile_fail
 //! ```
 //!
 //! Then commit the updated `.stderr` files. The snapshots are part of the

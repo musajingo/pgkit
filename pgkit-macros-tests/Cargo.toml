@@ -1,6 +1,6 @@
 [package]
-name = "pgkit-derive-tests"
-description = "Tests for the pgkit-derive crate."
+name = "pgkit-macros-tests"
+description = "Tests for the pgkit-macros crate."
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

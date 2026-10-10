@@ -1,6 +1,6 @@
 [package]
-name = "pgkit-derive"
-description = "Derive macros for pgkit (Utilities for working with databases - postgres)."
+name = "pgkit-macros"
+description = "Procedural macros for pgkit (Utilities for working with databases - postgres)."
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

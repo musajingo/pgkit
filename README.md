@@ -537,8 +537,8 @@ pgkit = { version = "0.1", default-features = false }
 | Crate                | Purpose                                           |
 | -------------------- | ------------------------------------------------- |
 | `pgkit`              | The library. This is the one you depend on.       |
-| `pgkit-derive`       | The procedural macros, re-exported by `pgkit`.    |
-| `pgkit-derive-tests` | Compile-fail tests for the macros. Not published. |
+| `pgkit-macros`       | The procedural macros, re-exported by `pgkit`.    |
+| `pgkit-macros-tests` | Compile-fail tests for the macros. Not published. |
 
 ## License
 
