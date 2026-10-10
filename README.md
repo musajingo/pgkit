@@ -400,6 +400,66 @@ When you want to compose things yourself, `migrations!` gives you the raw
 `Vec<sqlx::migrate::Migration>` and `seeds!` the `&'static [Seed]` that
 the two wrapper macros are built from.
 
+### Merging collections from multiple sources (crates)
+
+The raw forms compose across crates. Each macro resolves its path against
+the crate that invokes it and embeds the SQL into that crate's build, so a
+library can collect its own migrations and seeds and export the finished
+collections:
+
+```rust,ignore
+// In the library crate — "db" is relative to *its* Cargo.toml.
+pub fn migrations() -> Vec<sqlx::migrate::Migration> {
+    pgkit::migrations!("db")
+}
+
+pub const SEEDS: &[pgkit::db_init::seeding::Seed] = pgkit::seeds!("db");
+```
+
+The application merges the collections and runs them as one migrator, so
+`_sqlx_migrations` stays a single history with every crate's migrations
+interleaved by timestamp:
+
+```rust,ignore
+let mut all = billing::migrations();
+all.extend(users::migrations());
+all.extend(pgkit::migrations!("src"));
+
+// The compile-time duplicate-version check is per collection; repeat it
+// across the merge. (The sort is only for this check — the migrator
+// sorts on its own.)
+all.sort_by_key(|m| m.version);
+assert!(all.windows(2).all(|w| w[0].version != w[1].version));
+
+pgkit::db_init::migrating::migrator(all).run(&pool).await?;
+```
+
+Seeds need no merging: the `Seeder` tracks nothing, so running one seeder
+per collection, one after another, covers the same scripts. The difference
+is failure behavior: one `Seeder` runs every script and returns all
+failures together, while `?` on the first run above stops the later
+collections — collect the results instead of `?`-ing each if you want
+every collection attempted:
+
+```rust,ignore
+pgkit::db_init::seeding::Seeder::new(billing::SEEDS).run(&pool).await?;
+pgkit::seeder!("src").run(&pool).await?;
+```
+
+Three things to watch:
+
+- The unique-version check runs per macro invocation, not across the merge.
+  A collision between two crates fails at run time instead of at build
+  time: a pending duplicate errors mid-migration (`_sqlx_migrations` keys
+  on the version), and a duplicate of an already-applied version with
+  different SQL is a checksum mismatch. Hence the assertion in the example
+  above.
+- A published library must ship its `.sql` files: mind any `include` or
+  `exclude` list in its `Cargo.toml` that would drop them from the package.
+- Removing a library later leaves its rows in `_sqlx_migrations`, and the
+  merged migrator then fails validation at startup. `sqlx` provides
+  `Migrator::set_ignore_missing(true)` for exactly that.
+
 One caveat comes with any file-embedding macro, and sqlx documents the same
 for `migrate!`: editing an embedded file recompiles automatically, but
 _adding or removing_ a file does not — the cached expansion is reused. Give
@@ -514,16 +574,16 @@ async fn migration_pool() -> Result<sqlx::PgPool, sqlx::Error> {
 
 All of these are on by default, except `db-init`.
 
-| Feature             | Provides                                                           |
-| ------------------- | ------------------------------------------------------------------ |
-| `partial-row`       | `try_get_option`, and with `cursor-pagination`, `#[derive(PgKit)]` |
-| `offset-pagination` | `pagination::offset`                                               |
-| `cursor-pagination` | `pagination::cursor`                                               |
-| `pagination`        | Both pagination features                                           |
+| Feature             | Provides                                                                                       |
+| ------------------- | ---------------------------------------------------------------------------------------------- |
+| `partial-row`       | `try_get_option`, and with `cursor-pagination`, `#[derive(PgKit)]`                             |
+| `offset-pagination` | `pagination::offset`                                                                           |
+| `cursor-pagination` | `pagination::cursor`                                                                           |
+| `pagination`        | Both pagination features                                                                       |
 | `repository-error`  | `errors::RepositoryError`; its `CursorPagination` variant only exists with `cursor-pagination` |
-| `retry`             | `#[pgkit::retry]` and `retry::run` (needs Tokio)                   |
-| `serde`             | `Serialize` / `Deserialize` for `OrderByDirection` and similar     |
-| `db-init`           | `migrator!` / `seeder!` and `db_init` — off by default             |
+| `retry`             | `#[pgkit::retry]` and `retry::run` (needs Tokio)                                               |
+| `serde`             | `Serialize` / `Deserialize` for `OrderByDirection` and similar                                 |
+| `db-init`           | `migrator!` / `seeder!` and `db_init` — off by default                                         |
 
 The query builder, `ordering`, `projection`, `pool` and `full_text_search`
 are always available. To use only the query builder:

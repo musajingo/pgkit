@@ -25,8 +25,8 @@ impl Migrations {
         }
 
         migrations.sort_by_key(|m| m.version);
-        // sqlx keys migrations by version: a duplicate would be silently
-        // skipped at run time, so it fails the build instead.
+        // sqlx keys migrations by version: a duplicate would only fail at
+        // run time, mid-migration, so it fails the build instead.
         if let Some([a, b]) = migrations.windows(2).find(|w| w[0].version == w[1].version) {
             return Err(syn::Error::new(
                 span,
