@@ -393,26 +393,22 @@ pub fn migrations() -> Vec<sqlx::migrate::Migration> {
 pub const SEEDS: &[pgkit::db_init::seeding::Seed] = pgkit::seeds!("db");
 ```
 
-Merge dependency and application migrations before running them:
+Merge dependency and application migrations before running them.
+`merge_migrations` sorts by version and rejects duplicate versions —
+naming the colliding version — before any SQL runs:
 
 ```rust,ignore
-let mut all = billing::migrations();
-all.extend(users::migrations());
-all.extend(pgkit::migrations!("src"));
-
-// Check versions across all collections before running any SQL.
-all.sort_by_key(|m| m.version);
-assert!(
-    all.windows(2).all(|w| w[0].version != w[1].version),
-    "duplicate migration version",
-);
-
-pgkit::db_init::migrating::migrator(all).run(&pool).await?;
+let migrator = pgkit::db_init::migrating::merge_migrations([
+    billing::migrations(),
+    users::migrations(),
+    pgkit::migrations!("src"),
+])?;
+migrator.run(&pool).await?;
 ```
 
-Versions must be globally unique. The migrator sorts by version, so append
-order does not control execution: coordinate versions when migrations depend
-on another crate's schema. Each migration keeps its own history entry.
+Versions must be globally unique. The merged migrator sorts by version, so
+append order does not control execution: coordinate versions when migrations
+depend on another crate's schema. Each migration keeps its own history entry.
 
 For one combined seeder, store the merged seeds in a `OnceLock` to satisfy
 `Seeder::new`'s `&'static [Seed]` requirement:
